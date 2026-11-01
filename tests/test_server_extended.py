@@ -1384,3 +1384,28 @@ class TestTranscriptionServerControlFrames(unittest.TestCase):
 
         self.assertTrue(keep_going)
         client.add_frames.assert_not_called()
+
+
+class TestHandleControlMessage(unittest.TestCase):
+    """Text control frames must not crash the receive loop on non-object JSON."""
+
+    def setUp(self):
+        self.server = TranscriptionServer.__new__(TranscriptionServer)
+        self.websocket = MagicMock()
+        self.server.client_manager = MagicMock()
+
+    def test_non_object_json_is_ignored(self):
+        for frame in ("42", "[]", '"hello"', "null", "true"):
+            self.assertFalse(self.server.handle_control_message(self.websocket, frame))
+
+    def test_malformed_json_is_ignored(self):
+        self.assertFalse(self.server.handle_control_message(self.websocket, "{not json"))
+
+    def test_reset_message_requests_a_reset(self):
+        client = MagicMock()
+        self.server.client_manager.get_client.return_value = client
+
+        self.assertTrue(self.server.handle_control_message(
+            self.websocket, json.dumps({"reset_transcript": True})))
+
+        client.request_transcript_reset.assert_called_once()

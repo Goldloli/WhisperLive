@@ -525,6 +525,9 @@ class TranscriptionServer:
         except (TypeError, ValueError):
             logging.warning(f"Ignoring malformed control message: {frame_data!r}")
             return False
+        if not isinstance(message, dict):
+            logging.warning(f"Ignoring non-object control message: {frame_data!r}")
+            return False
         if message.get("reset_transcript"):
             client = self.client_manager.get_client(websocket)
             if client is not None:
