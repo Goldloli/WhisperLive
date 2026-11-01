@@ -394,9 +394,6 @@ class TestClientKnownSpeakers(unittest.TestCase):
         client.close_websocket()
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 class TestClientResetTranscript(unittest.TestCase):
     """Tests for the client side of the transcript reset."""
 
@@ -451,3 +448,7 @@ class TestClientResetTranscript(unittest.TestCase):
 
         first.reset_transcript.assert_called_once()
         second.reset_transcript.assert_called_once()
+
+if __name__ == "__main__":
+    unittest.main()
+
