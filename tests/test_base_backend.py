@@ -810,3 +810,46 @@ class TestTranscriptReset(unittest.TestCase):
         client.reset_transcript()
 
         self.assertEqual(client.transcript, [])
+
+    def test_audio_arriving_after_reset_request_is_kept_for_the_new_transcript(self):
+        client, ws = self._make_client()
+        client.frames_np = np.zeros(100, dtype=np.float32)
+        client.frames_offset = 2.0
+        client.timestamp_offset = 3.0
+
+        client.request_transcript_reset()
+        new_audio = np.ones(5, dtype=np.float32)
+        client.add_frames(new_audio)
+
+        # The frames must not be dropped together with the old buffer.
+        self.assertTrue(client.frames_ready.is_set())
+        self.assertTrue(client.apply_pending_reset())
+        self.assertIsNotNone(client.frames_np)
+        self.assertTrue(np.array_equal(client.frames_np, new_audio))
+        self.assertEqual(client.frames_offset, 0.0)
+        self.assertEqual(client.timestamp_offset, 0.0)
+        # Audio already arrived, so the transcription loop must wake up for it.
+        self.assertTrue(client.frames_ready.is_set())
+
+    def test_frames_arriving_while_reset_pending_are_concatenated(self):
+        client, ws = self._make_client()
+        client.request_transcript_reset()
+        client.add_frames(np.ones(3, dtype=np.float32))
+        client.add_frames(np.ones(4, dtype=np.float32) * 2)
+
+        client.apply_pending_reset()
+
+        self.assertIsNotNone(client.frames_np)
+        self.assertEqual(client.frames_np.shape[0], 7)
+        self.assertTrue(np.array_equal(
+            client.frames_np[-4:], np.ones(4, dtype=np.float32) * 2))
+
+    def test_reset_without_new_audio_clears_the_wake_up(self):
+        client, ws = self._make_client()
+        client.frames_ready.set()
+        client.request_transcript_reset()
+
+        client.apply_pending_reset()
+
+        self.assertIsNone(client.frames_np)
+        self.assertFalse(client.frames_ready.is_set())

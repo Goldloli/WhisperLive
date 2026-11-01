@@ -106,8 +106,11 @@ class ServeClientBase(object):
         self.frames_ready = threading.Event()
         # Set by the receive thread when the client asks for a fresh transcript;
         # applied by speech_to_text so an in-flight transcription cannot leak
-        # old segments into the new transcript.
+        # old segments into the new transcript. Audio that arrives while the
+        # reset is pending must not be dropped: add_frames parks it here and
+        # reset_transcript swaps it in as the new frames_np.
         self.reset_requested = threading.Event()
+        self.pending_reset_frames = None
 
     def speech_to_text(self):
         """
@@ -187,7 +190,6 @@ class ServeClientBase(object):
         """
         if not self.reset_requested.is_set():
             return False
-        self.reset_requested.clear()
         self.reset_transcript()
         return True
 
@@ -200,17 +202,28 @@ class ServeClientBase(object):
         segments to the new transcript.
         """
         with self.lock:
+            # Frames that arrived after the reset request were parked by
+            # add_frames; they belong to the new transcript, so swap them in
+            # while clearing the flag under the same lock.
+            pending_frames = self.pending_reset_frames
+            self.pending_reset_frames = None
+            self.reset_requested.clear()
             self.transcript = []
             self.text = []
             self.frames = b""
-            self.frames_np = None
+            self.frames_np = pending_frames
             self.frames_offset = 0.0
             self.timestamp_offset = 0.0
             self.current_out = ""
             self.prev_out = ""
             self.same_output_count = 0
             self.end_time_for_same_output = None
-        self.frames_ready.clear()
+            if pending_frames is None:
+                self.frames_ready.clear()
+            else:
+                # There is already audio to process: keep the wake-up that a
+                # clear() would drop.
+                self.frames_ready.set()
 
         if self.translation_queue is not None:
             while True:
@@ -285,6 +298,17 @@ class ServeClientBase(object):
 
         """
         with self.lock:
+            if self.reset_requested.is_set():
+                # The transcript thread will clear frames_np when it reaches
+                # apply_pending_reset; park this audio so it is not dropped
+                # with the old buffer.
+                if self.pending_reset_frames is None:
+                    self.pending_reset_frames = frame_np.copy()
+                else:
+                    self.pending_reset_frames = np.concatenate(
+                        (self.pending_reset_frames, frame_np), axis=0)
+                self.frames_ready.set()
+                return
             if self.frames_np is not None and self.frames_np.shape[0] > self.MAX_BUFFER_DURATION_S*self.RATE:
                 self.frames_offset += float(self.BUFFER_TRIM_DURATION_S)
                 self.frames_np = self.frames_np[int(self.BUFFER_TRIM_DURATION_S*self.RATE):]
